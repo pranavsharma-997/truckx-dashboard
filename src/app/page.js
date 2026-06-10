@@ -120,6 +120,7 @@ export default function Dashboard() {
   const [clock, setClock] = useState(null);
 
   const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [productFilter, setProductFilter] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
@@ -128,17 +129,25 @@ export default function Dashboard() {
   const [endDate, setEndDate] = useState(getToday());
 
   const [currentPage, setCurrentPage] = useState(1);
-  const rowsPerPage = 100;
+  const rowsPerPage = 50;
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+  fetchDashboardData();
+}, []);
 
-  useEffect(() => {
-    setClock(new Date());
-    const timer = setInterval(() => setClock(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+useEffect(() => {
+  setClock(new Date());
+  const timer = setInterval(() => setClock(new Date()), 1000);
+  return () => clearInterval(timer);
+}, []);
+
+useEffect(() => {
+  const timer = setTimeout(() => {
+    setSearch(searchInput);
+  }, 300);
+
+  return () => clearTimeout(timer);
+}, [searchInput]);
 
   async function loadRangeData(fromDate, toDate, query = "", updateProgress = false) {
     let allLogs = [];
@@ -157,8 +166,9 @@ export default function Dashboard() {
       const dayEnd = `${day}T23:59:59`;
 
       let page = 1;
+const MAX_PAGES_PER_DAY = 20;
 
-      while (true) {
+while (page <= MAX_PAGES_PER_DAY) {
         const url =
           `https://support.truckx.com/api/client-service/support/site-search/` +
           `?page=${page}&page_size=${PAGE_SIZE}&query=${encodeURIComponent(query)}` +
@@ -179,10 +189,9 @@ export default function Dashboard() {
         allLogs.push(...logs);
         totalLoadedPages++;
 
-        if (updateProgress) {
-          setLoadedPages(totalLoadedPages);
-          setIssues([...allLogs]);
-        }
+       if (updateProgress && totalLoadedPages % 5 === 0) {
+  setLoadedPages(totalLoadedPages);
+}
 
         if (logs.length < PAGE_SIZE) break;
         page++;
@@ -253,11 +262,39 @@ export default function Dashboard() {
     });
   }, [issues, search, statusFilter, productFilter, agentFilter]);
 
-  const pendingCount = filteredIssues.filter((i) => i.status === "PENDING").length;
-  const resolvedCount = filteredIssues.filter((i) => i.status === "RESOLVED").length;
+  const { pendingCount, resolvedCount } = useMemo(() => {
+  let pending = 0;
+  let resolved = 0;
 
-  const uniqueProducts = [...new Set(issues.map((i) => i.product).filter(Boolean))];
-  const uniqueAgents = [...new Set(issues.map((i) => i.support_person).filter(Boolean))];
+  for (const item of filteredIssues) {
+    if (item.status === "PENDING") pending++;
+    if (item.status === "RESOLVED") resolved++;
+  }
+
+  return {
+    pendingCount: pending,
+    resolvedCount: resolved,
+  };
+}, [filteredIssues]);
+
+  const { uniqueProducts, uniqueAgents } = useMemo(() => {
+  return {
+    uniqueProducts: [
+      ...new Set(
+        issues
+          .map((i) => i.product)
+          .filter(Boolean)
+      ),
+    ],
+    uniqueAgents: [
+      ...new Set(
+        issues
+          .map((i) => i.support_person)
+          .filter(Boolean)
+      ),
+    ],
+  };
+}, [issues]);
 
   const productData = uniqueProducts
     .map((product) => ({
@@ -465,14 +502,14 @@ export default function Dashboard() {
 
         <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-6">
           <input
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setCurrentPage(1);
-            }}
-            placeholder="Search DOT / Caller / Phone"
-            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm outline-none focus:border-blue-500"
-          />
+  value={searchInput}
+  onChange={(e) => {
+    setSearchInput(e.target.value);
+    setCurrentPage(1);
+  }}
+  placeholder="Search DOT / Caller / Phone"
+  className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm outline-none focus:border-blue-500"
+/>
 
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <option value="">All Status</option>
