@@ -16,8 +16,10 @@ import {
   Line,
 } from "recharts";
 
-const PAGE_SIZE = 1000;
-const TIME_ZONE = "America/Los_Angeles";
+const PAGE_SIZE = 200;
+const TIME_ZONE = "Asia/Kolkata";
+const MAX_DAYS_TO_LOAD = 7;
+const MAX_PAGES_PER_DAY = 5;
 
 function toDateInput(date) {
   const y = date.getFullYear();
@@ -40,9 +42,8 @@ function getItemDate(item) {
   return item.login_datetime || item.created_at || item.created || item.date || "";
 }
 
-function parsePSTDate(value) {
+function parseDate(value) {
   if (!value) return null;
-
   const text = String(value).trim();
   const normalized = text.includes("T") ? text : text.replace(" ", "T");
 
@@ -57,14 +58,13 @@ function parsePSTDate(value) {
 
   if ([year, month, day, hour, minute, second].some((n) => Number.isNaN(n))) return null;
 
-  const utc = Date.UTC(year, month - 1, day, hour, minute, second);
-  return new Date(utc);
+  return new Date(Date.UTC(year, month - 1, day, hour, minute, second));
 }
 
-function formatDateTimePST(value) {
-  const d = parsePSTDate(value);
+function formatDateTimeIST(value) {
+  const d = parseDate(value);
   if (!d) return "-";
-  return d.toLocaleString("en-US", {
+  return d.toLocaleString("en-IN", {
     timeZone: TIME_ZONE,
     year: "numeric",
     month: "2-digit",
@@ -76,20 +76,8 @@ function formatDateTimePST(value) {
   });
 }
 
-function formatTimeOnlyPST(value) {
-  const d = parsePSTDate(value);
-  if (!d) return "-";
-  return d.toLocaleTimeString("en-US", {
-    timeZone: TIME_ZONE,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-}
-
 function getDateOnly(value) {
-  const d = parsePSTDate(value);
+  const d = parseDate(value);
   if (!d) return "";
   return d.toLocaleDateString("en-CA", {
     timeZone: TIME_ZONE,
@@ -99,17 +87,14 @@ function getDateOnly(value) {
   });
 }
 
-function getDayName(date) {
-  return date.toLocaleDateString("en-US", {
-    timeZone: TIME_ZONE,
-    weekday: "short",
-  });
-}
-
 function statusBadge(status) {
   if (status === "RESOLVED") return "bg-emerald-100 text-emerald-700";
   if (status === "PENDING") return "bg-orange-100 text-orange-700";
   return "bg-slate-100 text-slate-700";
+}
+
+function uniqueValues(items, key) {
+  return [...new Set(items.map((i) => i[key]).filter(Boolean))].sort();
 }
 
 export default function Dashboard() {
@@ -124,6 +109,9 @@ export default function Dashboard() {
   const [statusFilter, setStatusFilter] = useState("");
   const [productFilter, setProductFilter] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
+  const [dotFilter, setDotFilter] = useState("");
+  const [phoneFilter, setPhoneFilter] = useState("");
+  const [callerFilter, setCallerFilter] = useState("");
 
   const [startDate, setStartDate] = useState(getLast7Start());
   const [endDate, setEndDate] = useState(getToday());
@@ -132,43 +120,36 @@ export default function Dashboard() {
   const rowsPerPage = 50;
 
   useEffect(() => {
-  fetchDashboardData();
-}, []);
+    fetchDashboardData();
+  }, []);
 
-useEffect(() => {
-  setClock(new Date());
-  const timer = setInterval(() => setClock(new Date()), 1000);
-  return () => clearInterval(timer);
-}, []);
+  useEffect(() => {
+    setClock(new Date());
+    const timer = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
-useEffect(() => {
-  const timer = setTimeout(() => {
-    setSearch(searchInput);
-  }, 300);
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchInput), 250);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
-  return () => clearTimeout(timer);
-}, [searchInput]);
-
-  async function loadRangeData(fromDate, toDate, query = "", updateProgress = false) {
-    let allLogs = [];
-    let totalLoadedPages = 0;
-
+  async function loadRangeData(fromDate, toDate, query = "") {
+    const allLogs = [];
     const start = new Date(fromDate);
     const end = new Date(toDate);
-
     const dayList = [];
+
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       dayList.push(toDateInput(new Date(d)));
+      if (dayList.length >= MAX_DAYS_TO_LOAD) break;
     }
 
     for (const day of dayList) {
       const dayStart = `${day}T00:00:00`;
       const dayEnd = `${day}T23:59:59`;
 
-      let page = 1;
-const MAX_PAGES_PER_DAY = 20;
-
-while (page <= MAX_PAGES_PER_DAY) {
+      for (let page = 1; page <= MAX_PAGES_PER_DAY; page++) {
         const url =
           `https://support.truckx.com/api/client-service/support/site-search/` +
           `?page=${page}&page_size=${PAGE_SIZE}&query=${encodeURIComponent(query)}` +
@@ -183,22 +164,14 @@ while (page <= MAX_PAGES_PER_DAY) {
 
         const data = await res.json();
         const logs = data.logs || [];
-
         if (!logs.length) break;
 
         allLogs.push(...logs);
-        totalLoadedPages++;
-
-       if (updateProgress && totalLoadedPages % 5 === 0) {
-  setLoadedPages(totalLoadedPages);
-}
-
         if (logs.length < PAGE_SIZE) break;
-        page++;
       }
     }
 
-    return { logs: allLogs, pages: totalLoadedPages };
+    return { logs: allLogs };
   }
 
   async function fetchDashboardData() {
@@ -208,9 +181,9 @@ while (page <= MAX_PAGES_PER_DAY) {
       setLoadedPages(0);
       setCurrentPage(1);
 
-      const result = await loadRangeData(startDate, endDate, "", true);
+      const result = await loadRangeData(startDate, endDate, "");
       setIssues(result.logs);
-      setLoadedPages(result.pages);
+      setLoadedPages(Math.max(1, Math.ceil(result.logs.length / PAGE_SIZE)));
     } catch (error) {
       console.error("Dashboard API Error:", error);
       setIssues([]);
@@ -243,74 +216,62 @@ while (page <= MAX_PAGES_PER_DAY) {
 
   const filteredIssues = useMemo(() => {
     const text = search.toLowerCase();
-
     return issues.filter((item) => {
+      const matchesText =
+        !search ||
+        item.dot?.toString().toLowerCase().includes(text) ||
+        item.caller_name?.toLowerCase().includes(text) ||
+        item.phone_number?.toString().toLowerCase().includes(text) ||
+        item.product?.toLowerCase().includes(text) ||
+        item.support_person?.toLowerCase().includes(text) ||
+        item.issue_type?.toLowerCase().includes(text) ||
+        item.problem?.toLowerCase().includes(text) ||
+        item.company_name?.toLowerCase().includes(text);
+
       return (
-        (!search ||
-          item.dot?.toString().toLowerCase().includes(text) ||
-          item.caller_name?.toLowerCase().includes(text) ||
-          item.phone_number?.toString().toLowerCase().includes(text) ||
-          item.product?.toLowerCase().includes(text) ||
-          item.support_person?.toLowerCase().includes(text) ||
-          item.issue_type?.toLowerCase().includes(text) ||
-          item.problem?.toLowerCase().includes(text) ||
-          item.company_name?.toLowerCase().includes(text)) &&
+        matchesText &&
         (!statusFilter || item.status === statusFilter) &&
         (!productFilter || item.product === productFilter) &&
-        (!agentFilter || item.support_person === agentFilter)
+        (!agentFilter || item.support_person === agentFilter) &&
+        (!dotFilter || String(item.dot || "").includes(dotFilter)) &&
+        (!phoneFilter || String(item.phone_number || "").includes(phoneFilter)) &&
+        (!callerFilter || String(item.caller_name || "").toLowerCase().includes(callerFilter.toLowerCase()))
       );
     });
-  }, [issues, search, statusFilter, productFilter, agentFilter]);
+  }, [issues, search, statusFilter, productFilter, agentFilter, dotFilter, phoneFilter, callerFilter]);
 
   const { pendingCount, resolvedCount } = useMemo(() => {
-  let pending = 0;
-  let resolved = 0;
+    let pending = 0;
+    let resolved = 0;
+    for (const item of filteredIssues) {
+      if (item.status === "PENDING") pending++;
+      if (item.status === "RESOLVED") resolved++;
+    }
+    return { pendingCount: pending, resolvedCount: resolved };
+  }, [filteredIssues]);
 
-  for (const item of filteredIssues) {
-    if (item.status === "PENDING") pending++;
-    if (item.status === "RESOLVED") resolved++;
-  }
+  const uniqueProducts = useMemo(() => uniqueValues(issues, "product"), [issues]);
+  const uniqueAgents = useMemo(() => uniqueValues(issues, "support_person"), [issues]);
 
-  return {
-    pendingCount: pending,
-    resolvedCount: resolved,
-  };
-}, [filteredIssues]);
+  const productData = useMemo(() => {
+    return uniqueProducts
+      .map((product) => ({
+        name: product,
+        count: filteredIssues.filter((i) => i.product === product).length,
+      }))
+      .filter((x) => x.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }, [uniqueProducts, filteredIssues]);
 
-  const { uniqueProducts, uniqueAgents } = useMemo(() => {
-  return {
-    uniqueProducts: [
-      ...new Set(
-        issues
-          .map((i) => i.product)
-          .filter(Boolean)
-      ),
-    ],
-    uniqueAgents: [
-      ...new Set(
-        issues
-          .map((i) => i.support_person)
-          .filter(Boolean)
-      ),
-    ],
-  };
-}, [issues]);
-
-  const productData = uniqueProducts
-    .map((product) => ({
-      name: product,
-      count: filteredIssues.filter((i) => i.product === product).length,
-    }))
-    .filter((x) => x.count > 0)
-    .sort((a, b) => b.count - a.count);
-
-  const agentData = uniqueAgents
-    .map((agent) => ({
-      name: agent,
-      count: filteredIssues.filter((i) => i.support_person === agent).length,
-    }))
-    .filter((x) => x.count > 0)
-    .sort((a, b) => b.count - a.count);
+  const agentData = useMemo(() => {
+    return uniqueAgents
+      .map((agent) => ({
+        name: agent,
+        count: filteredIssues.filter((i) => i.support_person === agent).length,
+      }))
+      .filter((x) => x.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }, [uniqueAgents, filteredIssues]);
 
   const today = getToday();
   const yesterdayDate = new Date();
@@ -331,7 +292,8 @@ while (page <= MAX_PAGES_PER_DAY) {
     .map((date) => ({ date, count: dayMap[date] }));
 
   const topProduct = productData[0]?.name || "-";
-  const topAgent = agentData[0]?.name || "-";
+  const topHandledAccount = agentData[0]?.name || "-";
+  const topHandledCount = agentData[0]?.count || 0;
   const avgPerDay = dailyTrend.length ? Math.round(filteredIssues.length / dailyTrend.length) : 0;
 
   const resolutionRate = filteredIssues.length ? Math.round((resolvedCount / filteredIssues.length) * 100) : 0;
@@ -363,11 +325,7 @@ while (page <= MAX_PAGES_PER_DAY) {
 
   const latestOpenIssues = [...filteredIssues]
     .filter((i) => i.status === "PENDING")
-    .sort((a, b) => {
-      const da = parsePSTDate(getItemDate(a))?.getTime() || 0;
-      const db = parsePSTDate(getItemDate(b))?.getTime() || 0;
-      return db - da;
-    })
+    .sort((a, b) => (parseDate(getItemDate(b))?.getTime() || 0) - (parseDate(getItemDate(a))?.getTime() || 0))
     .slice(0, 8);
 
   const totalPages = Math.ceil(filteredIssues.length / rowsPerPage) || 1;
@@ -375,9 +333,13 @@ while (page <= MAX_PAGES_PER_DAY) {
 
   function clearFilters() {
     setSearch("");
+    setSearchInput("");
     setStatusFilter("");
     setProductFilter("");
     setAgentFilter("");
+    setDotFilter("");
+    setPhoneFilter("");
+    setCallerFilter("");
     setCurrentPage(1);
   }
 
@@ -392,7 +354,7 @@ while (page <= MAX_PAGES_PER_DAY) {
       "Agent",
       "Company",
       "Problem",
-      "Login Time (PST)",
+      "Login Time (IST)",
     ];
 
     const rows = filteredIssues.map((item) => [
@@ -405,7 +367,7 @@ while (page <= MAX_PAGES_PER_DAY) {
       item.support_person || "",
       item.company_name || "",
       item.problem || "",
-      formatDateTimePST(getItemDate(item)),
+      formatDateTimeIST(getItemDate(item)),
     ]);
 
     const csv = [
@@ -422,6 +384,13 @@ while (page <= MAX_PAGES_PER_DAY) {
     URL.revokeObjectURL(url);
   }
 
+  function applyGraphFilter(type, value) {
+    if (type === "product") setProductFilter(value);
+    if (type === "agent") setAgentFilter(value);
+    setActivePage("tickets");
+    setCurrentPage(1);
+  }
+
   const menuItems = [
     ["overview", "Executive Overview"],
     ["products", "Product Insights"],
@@ -434,9 +403,7 @@ while (page <= MAX_PAGES_PER_DAY) {
     <main className="flex min-h-screen bg-[#eef3f9] text-slate-900">
       <aside className="fixed left-0 top-0 h-screen w-72 bg-gradient-to-b from-[#06101f] via-[#0b1d3a] to-[#102e65] p-5 text-white shadow-2xl">
         <h1 className="text-2xl font-black">TruckX</h1>
-        <p className="mb-8 mt-1 text-xs font-bold uppercase tracking-[0.25em] text-blue-300">
-          Support Command Center
-        </p>
+        <p className="mb-8 mt-1 text-xs font-bold uppercase tracking-[0.25em] text-blue-300">Support Command Center</p>
 
         <nav className="space-y-2">
           {menuItems.map(([id, label]) => (
@@ -453,21 +420,13 @@ while (page <= MAX_PAGES_PER_DAY) {
             </button>
           ))}
         </nav>
-
-        <div className="absolute bottom-5 left-5 right-5 rounded-2xl border border-white/10 bg-white/10 p-4">
-          <p className="text-xs font-bold text-blue-200">Default View</p>
-          <p className="mt-1 text-sm font-black">Last 7 Days</p>
-          <p className="mt-2 text-xs text-slate-300">Dashboard loads account activity only.</p>
-        </div>
       </aside>
 
       <section className="ml-72 flex-1 p-6">
         <div className="mb-6 rounded-[32px] bg-gradient-to-r from-[#06101f] via-[#12306a] to-[#06101f] p-7 text-white shadow-xl">
           <div className="flex flex-col gap-6 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <p className="text-sm font-bold uppercase tracking-[0.3em] text-blue-300">
-                Executive Support Analytics
-              </p>
+              <p className="text-sm font-bold uppercase tracking-[0.3em] text-blue-300">Executive Support Analytics</p>
               <h2 className="mt-2 text-4xl font-black">Account Activity Dashboard</h2>
               <p className="mt-2 text-sm text-slate-300">
                 Dashboard range: {startDate} to {endDate} | Loaded pages: {loadedPages} | Account opens: {issues.length}
@@ -476,15 +435,14 @@ while (page <= MAX_PAGES_PER_DAY) {
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
-                <p className="text-xs font-bold uppercase tracking-widest text-orange-200">Pacific Time</p>
-                <p className="mt-1 font-mono text-3xl font-black">{formatTime("America/Los_Angeles")}</p>
-                <p className="text-xs text-slate-300">{formatDate("America/Los_Angeles")}</p>
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
-                <p className="text-xs font-bold uppercase tracking-widest text-blue-200">IST Time</p>
+                <p className="text-xs font-bold uppercase tracking-widest text-orange-200">IST Time</p>
                 <p className="mt-1 font-mono text-3xl font-black">{formatTime("Asia/Kolkata")}</p>
                 <p className="text-xs text-slate-300">{formatDate("Asia/Kolkata")}</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+                <p className="text-xs font-bold uppercase tracking-widest text-blue-200">UTC</p>
+                <p className="mt-1 font-mono text-3xl font-black">{formatTime("UTC")}</p>
+                <p className="text-xs text-slate-300">{formatDate("UTC")}</p>
               </div>
             </div>
           </div>
@@ -493,7 +451,6 @@ while (page <= MAX_PAGES_PER_DAY) {
             <button onClick={exportCSV} className="rounded-xl bg-white px-5 py-3 font-bold text-slate-950 shadow">
               Export CSV
             </button>
-
             <button onClick={fetchDashboardData} className="rounded-xl bg-blue-600 px-5 py-3 font-bold text-white shadow">
               Refresh Dashboard
             </button>
@@ -502,67 +459,49 @@ while (page <= MAX_PAGES_PER_DAY) {
 
         <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-6">
           <input
-  value={searchInput}
-  onChange={(e) => {
-    setSearchInput(e.target.value);
-    setCurrentPage(1);
-  }}
-  placeholder="Search DOT / Caller / Phone"
-  className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm outline-none focus:border-blue-500"
-/>
-
+            value={searchInput}
+            onChange={(e) => {
+              setSearchInput(e.target.value);
+              setCurrentPage(1);
+            }}
+            placeholder="Search DOT / Caller / Phone"
+            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm outline-none focus:border-blue-500"
+          />
+          <input value={dotFilter} onChange={(e) => setDotFilter(e.target.value)} placeholder="Filter DOT" className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm" />
+          <input value={callerFilter} onChange={(e) => setCallerFilter(e.target.value)} placeholder="Filter Caller" className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm" />
+          <input value={phoneFilter} onChange={(e) => setPhoneFilter(e.target.value)} placeholder="Filter Phone" className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm" />
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <option value="">All Status</option>
             <option value="PENDING">Pending</option>
             <option value="RESOLVED">Resolved</option>
           </select>
-
           <select value={productFilter} onChange={(e) => setProductFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <option value="">All Products</option>
             {uniqueProducts.map((x) => (
-              <option key={x} value={x}>
-                {x}
-              </option>
+              <option key={x} value={x}>{x}</option>
             ))}
           </select>
-
           <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <option value="">All Agents</option>
             {uniqueAgents.map((x) => (
-              <option key={x} value={x}>
-                {x}
-              </option>
+              <option key={x} value={x}>{x}</option>
             ))}
           </select>
-
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
-          />
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
-          />
+          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm" />
+          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm" />
         </div>
 
         <div className="mb-6 flex gap-3">
           <button onClick={fetchDashboardData} className="rounded-xl bg-emerald-600 px-5 py-3 font-bold text-white shadow">
             Apply Date Range
           </button>
-
           <button onClick={clearFilters} className="rounded-xl bg-red-100 px-5 py-3 font-bold text-red-700 shadow">
             Clear Filters
           </button>
         </div>
 
         {loading ? (
-          <div className="rounded-3xl bg-white p-10 text-center text-xl font-black shadow">
-            Loading last 7 days account activity... Pages: {loadedPages} | Records: {issues.length}
-          </div>
+          <div className="rounded-3xl bg-white p-10 text-center text-xl font-black shadow">Loading account activity... please wait.</div>
         ) : (
           <>
             {activePage === "overview" && (
@@ -570,32 +509,25 @@ while (page <= MAX_PAGES_PER_DAY) {
                 <div className="mb-6 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
                   <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
                     <div>
-                      <p className="text-sm font-bold uppercase tracking-[0.25em] text-blue-600">
-                        TruckX Support Analytics
-                      </p>
+                      <p className="text-sm font-bold uppercase tracking-[0.25em] text-blue-600">TruckX Support Analytics</p>
                       <h2 className="mt-2 text-3xl font-black text-slate-900">Executive Support Snapshot</h2>
-
                       <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
                         {[
                           `${filteredIssues.length} account opens in selected range`,
                           `${resolutionRate}% resolved and ${pendingRate}% pending`,
                           `${topProduct} is the highest activity product`,
-                          `${topAgent} is the top active agent`,
+                          `${topHandledAccount} is the top handled account agent`,
                         ].map((item, index) => (
-                          <div
-                            key={index}
-                            className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm font-bold text-slate-700"
-                          >
+                          <div key={index} className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm font-bold text-slate-700">
                             {item}
                           </div>
                         ))}
                       </div>
                     </div>
-
                     <div className="min-w-[260px] rounded-3xl bg-gradient-to-br from-blue-700 to-slate-950 p-6 text-white shadow-xl">
-                      <p className="text-sm font-bold text-blue-200">Resolution Rate</p>
-                      <p className="mt-2 text-5xl font-black">{resolutionRate}%</p>
-                      <p className="mt-2 text-sm text-slate-300">Based on selected dashboard range</p>
+                      <p className="text-sm font-bold text-blue-200">Top Handled Accounts</p>
+                      <p className="mt-2 text-5xl font-black">{topHandledCount}</p>
+                      <p className="mt-2 text-sm text-slate-300">{topHandledAccount}</p>
                     </div>
                   </div>
                 </div>
@@ -609,7 +541,7 @@ while (page <= MAX_PAGES_PER_DAY) {
                     ["Yesterday Opens", yesterdayCount, "text-slate-700"],
                     ["Avg Opens / Day", avgPerDay, "text-cyan-600"],
                     ["Top Product", topProduct, "text-indigo-600"],
-                    ["Top Agent", topAgent, "text-rose-600"],
+                    ["Top Handled Accounts", topHandledAccount, "text-rose-600"],
                   ].map(([title, value, color]) => (
                     <div key={title} className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
                       <h3 className="text-sm font-bold text-gray-500">{title}</h3>
@@ -631,7 +563,6 @@ while (page <= MAX_PAGES_PER_DAY) {
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-
                   <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
                     <h3 className="mb-4 text-xl font-black">Issue Status Distribution</h3>
                     <ResponsiveContainer width="100%" height={320}>
@@ -645,65 +576,20 @@ while (page <= MAX_PAGES_PER_DAY) {
                     </ResponsiveContainer>
                   </div>
                 </div>
-
-                <div className="mb-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-                  <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-                    <h3 className="mb-4 text-xl font-black">Agent Leaderboard</h3>
-
-                    <div className="space-y-3">
-                      {agentData.slice(0, 5).map((agent, index) => (
-                        <div key={agent.name} className="flex items-center justify-between rounded-2xl bg-slate-50 p-4">
-                          <div>
-                            <p className="font-black text-slate-900">
-                              {index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `#${index + 1}`}{" "}
-                              {agent.name}
-                            </p>
-                            <p className="text-xs font-bold text-slate-500">Account opens handled</p>
-                          </div>
-
-                          <p className="text-2xl font-black text-blue-700">{agent.count}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-                    <h3 className="mb-4 text-xl font-black">Latest Pending Accounts</h3>
-                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                      {latestOpenIssues.length === 0 ? (
-                        <p className="text-sm text-gray-500">No pending accounts found.</p>
-                      ) : (
-                        latestOpenIssues.map((item, index) => (
-                          <div key={index} className="rounded-2xl border border-orange-100 bg-orange-50 p-4">
-                            <div className="flex justify-between gap-3">
-                              <p className="font-black text-orange-800">DOT: {item.dot || "-"}</p>
-                              <p className="text-sm font-bold text-orange-700">{item.support_person || "-"}</p>
-                            </div>
-                            <p className="mt-1 text-sm text-slate-700">
-                              {item.caller_name || "-"} | {item.phone_number || "-"} | {item.product || "-"}
-                            </p>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {formatDateTimePST(getItemDate(item))}
-                            </p>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                </div>
               </>
             )}
 
             {activePage === "products" && (
               <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
                 <h3 className="mb-4 text-xl font-black">Product-wise Account Opens</h3>
+                <p className="mb-4 text-sm text-slate-500">Click any bar to filter records for that product.</p>
                 <ResponsiveContainer width="100%" height={500}>
                   <BarChart data={productData.slice(0, 25)}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="name" hide />
                     <YAxis />
                     <Tooltip />
-                    <Bar dataKey="count" fill="#2563eb" />
+                    <Bar dataKey="count" fill="#2563eb" onClick={(data) => data?.name && applyGraphFilter("product", data.name)} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -712,13 +598,14 @@ while (page <= MAX_PAGES_PER_DAY) {
             {activePage === "agents" && (
               <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
                 <h3 className="mb-4 text-xl font-black">Agent-wise Account Opens</h3>
+                <p className="mb-4 text-sm text-slate-500">Click any bar to filter records for that agent.</p>
                 <ResponsiveContainer width="100%" height={500}>
                   <BarChart data={agentData.slice(0, 30)}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="name" hide />
                     <YAxis />
                     <Tooltip />
-                    <Bar dataKey="count" fill="#7c3aed" />
+                    <Bar dataKey="count" fill="#7c3aed" onClick={(data) => data?.name && applyGraphFilter("agent", data.name)} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -732,8 +619,9 @@ while (page <= MAX_PAGES_PER_DAY) {
                     <button
                       key={item.name}
                       onClick={() => {
-                        setSearch(item.name);
+                        setDotFilter(item.name);
                         setActivePage("tickets");
+                        setCurrentPage(1);
                       }}
                       className="mb-3 flex w-full justify-between rounded-2xl bg-blue-50 p-4 text-left hover:bg-blue-100"
                     >
@@ -749,8 +637,9 @@ while (page <= MAX_PAGES_PER_DAY) {
                     <button
                       key={item.name}
                       onClick={() => {
-                        setSearch(item.name);
+                        setPhoneFilter(item.name);
                         setActivePage("tickets");
+                        setCurrentPage(1);
                       }}
                       className="mb-3 flex w-full justify-between rounded-2xl bg-purple-50 p-4 text-left hover:bg-purple-100"
                     >
@@ -771,10 +660,16 @@ while (page <= MAX_PAGES_PER_DAY) {
                       Showing {paginatedIssues.length} of {filteredIssues.length}
                     </p>
                   </div>
-
                   <div className="font-bold">
                     Page {currentPage} of {totalPages}
                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 border-b p-5 lg:grid-cols-4">
+                  <input value={dotFilter} onChange={(e) => setDotFilter(e.target.value)} placeholder="DOT" className="rounded-xl border border-slate-200 p-3" />
+                  <input value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} placeholder="Status" className="rounded-xl border border-slate-200 p-3" />
+                  <input value={callerFilter} onChange={(e) => setCallerFilter(e.target.value)} placeholder="Caller" className="rounded-xl border border-slate-200 p-3" />
+                  <input value={phoneFilter} onChange={(e) => setPhoneFilter(e.target.value)} placeholder="Phone" className="rounded-xl border border-slate-200 p-3" />
                 </div>
 
                 <table className="w-full text-sm">
@@ -787,7 +682,7 @@ while (page <= MAX_PAGES_PER_DAY) {
                       <th className="p-4">Product</th>
                       <th className="p-4">Issue</th>
                       <th className="p-4">Agent</th>
-                      <th className="p-4">Login Time (PST)</th>
+                      <th className="p-4">Login Time (IST)</th>
                     </tr>
                   </thead>
 
@@ -805,7 +700,7 @@ while (page <= MAX_PAGES_PER_DAY) {
                         <td className="p-4">{item.product || "-"}</td>
                         <td className="p-4">{item.issue_type || item.problem || "-"}</td>
                         <td className="p-4">{item.support_person || "-"}</td>
-                        <td className="p-4">{formatDateTimePST(getItemDate(item))}</td>
+                        <td className="p-4">{formatDateTimeIST(getItemDate(item))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -819,7 +714,6 @@ while (page <= MAX_PAGES_PER_DAY) {
                   >
                     Previous
                   </button>
-
                   <button
                     disabled={currentPage === totalPages}
                     onClick={() => setCurrentPage(currentPage + 1)}
